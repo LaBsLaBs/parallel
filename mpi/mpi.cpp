@@ -17,8 +17,18 @@ struct Msg {
 	int list[MAX_PART_ARRAY];
 };
 
-void registerStruct(Msg type, MPI_Datatype custom) {
+void registerStruct(Msg *type, MPI_Datatype *custom) {
+	MPI_Aint displacements[3] = {
+		offsetof(type, run),
+		offsetof(type, isEnd),
+		offsetof(type, list),
+	};
 
+	int block_lengths[3] = { 1, 1, MAX_PART_ARRAY };
+	MPI_Datatype types[3] = { MPI_C_BOOL, MPI_C_BOOL, MPI_INT };
+
+	MPI_Type_create_struct(3, block_lengths, displacements, types, custom);
+	MPI_Type_commit(custom);
 }
 
 void thread() {
