@@ -1,6 +1,7 @@
 ﻿#include <iostream>
 #include <time.h>
 #include <mpi.h>
+#include <math.h>
 
 
 using namespace std;
@@ -12,6 +13,15 @@ using namespace std;
 #define MAX_CHUNK 10
 #define MAX_POLYNOM 1000
 
+static MPI_Datatype mpi_custom_dt;
+
+struct indata_type {
+    int chunk;
+    unsigned int sizes[MAX_CHUNK];
+    int inputSize;
+    int input[MAX_POLYNOM];
+    bool run;
+};
 
 class Poly
 {
@@ -386,9 +396,10 @@ int calcOperations(int elements, int chunk)
 
 void killChildrens(int processesNum)
 {
-    bool run = false;
+    indata_type data;
+    data.run = false;
     for (int i = 1; i < processesNum; i++) {
-        MPI_Send(&run, 1, MPI_C_BOOL, i, 0, MPI_COMM_WORLD);
+        MPI_Send(&data, 1, mpi_custom_dt, i, 0, MPI_COMM_WORLD);
     }
 }
 
@@ -429,28 +440,28 @@ Polynoms decodePolyninoms(int *array, unsigned int size, int chunk, unsigned int
     return polynoms;
 }
 
-struct indata_type {
-    int chunk;
-    unsigned int* sizes;
-    int inputSize;
-    int* input;
-};
-
 void buildDerivedType(indata_type* indata, MPI_Datatype* message_type_ptr)
 {
-    MPI_Aint displacements[4] = { 
+    MPI_Aint displacements[5] = { 
         offsetof(indata_type, chunk),
         offsetof(indata_type, sizes),
         offsetof(indata_type, inputSize),
         offsetof(indata_type, input),
+        offsetof(indata_type, run),
     };
 
-    int block_lengths[4] = { 1, MAX_CHUNK, 1, MAX_POLYNOM };
-    MPI_Datatype types[4] = { MPI_INT, MPI_UNSIGNED, MPI_INT, MPI_INT };
-    MPI_Datatype custom_dt;
+    int block_lengths[5] = { 1, MAX_CHUNK, 1, MAX_POLYNOM, 1 };
+    MPI_Datatype types[5] = { MPI_INT, MPI_UNSIGNED, MPI_INT, MPI_INT, MPI_C_BOOL };
 
-    MPI_Type_create_struct(4, block_lengths, displacements, types, &custom_dt);
-    MPI_Type_commit(&custom_dt);
+    MPI_Type_create_struct(5, block_lengths, displacements, types, message_type_ptr);
+    MPI_Type_commit(message_type_ptr);
+}
+
+void copyArr(int* arr1, int sarr1, int* arr2, int sarr2) {
+    int resultSize = min(sarr1, sarr2);
+
+    for (int i = 0; i < resultSize; i++)
+        arr1[i] = arr2[i];
 }
 
 void thread()
@@ -462,12 +473,8 @@ void thread()
     Poly result;
 
     int* input = {};
-    unsigned int inputSize = 0;
     unsigned int* sizes = {};
-    int chunk = 0;
     int rank;
-
-    indata_type type;
 
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
@@ -475,21 +482,21 @@ void thread()
 
     while (true) {
         sum = 0;
+        indata_type data;
+        indata_type resultData;
         result = Poly();
 
-        MPI_Recv(&run, 1, MPI_C_BOOL, 0, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
-        if (!run)
+        MPI_Recv(&data, 1, mpi_custom_dt, 0, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
+        if (!data.run)
             break;
 
-        /* MPI_Recv(&chunk, 1, MPI_INT, 0, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
-        sizes = new unsigned int[chunk] {};
-        MPI_Recv(sizes, chunk, MPI_INT, 0, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
+        sizes = new unsigned int[data.chunk] {};
+        input = new int[data.inputSize] {};
 
-        MPI_Recv(&inputSize, 1, MPI_INT, 0, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
-        input = new int[inputSize] {};
-        MPI_Recv(input, inputSize, MPI_INT, 0, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
+        copyArr((int*)sizes, data.chunk, (int*)&data.sizes, MAX_CHUNK);
+        copyArr((int*)input, data.inputSize, (int*)&data.input, MAX_POLYNOM);
 
-        polynoms = decodePolyninoms(input, inputSize, chunk, sizes);
+        polynoms = decodePolyninoms(input, data.inputSize, data.chunk, sizes);
         result = polynoms.dotN(polynoms);
 
         cout << "child result" << rank << ": ";
@@ -497,11 +504,14 @@ void thread()
         cout << endl;
 
         int resultSize = (int)result.getSize();
-        MPI_Send(&resultSize, 1, MPI_INT, 0, 0, MPI_COMM_WORLD);
-        MPI_Send(result.getPoly(), result.getSize(), MPI_INT, 0, 0, MPI_COMM_WORLD);
+
+        copyArr((int*)&resultData.input, MAX_POLYNOM, result.getPoly(), resultSize);
+
+        resultData.inputSize = min(resultSize, MAX_POLYNOM);
+        MPI_Send(&resultData, 1, mpi_custom_dt, 0, 0, MPI_COMM_WORLD);
 
         delete[] input;
-        delete[] sizes; */
+        delete[] sizes;
     }
 }
 
@@ -524,7 +534,6 @@ Polynoms fillPolynoms()
     return polynoms;
 }
 
-
 int main(int argc, char *argv[])
 {
 	int rank, processesNum;
@@ -534,13 +543,17 @@ int main(int argc, char *argv[])
 	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 	MPI_Comm_size(MPI_COMM_WORLD, &processesNum);
 
+    indata_type type;
+
+    buildDerivedType(&type, &mpi_custom_dt);
+
 	if (rank == 0) {
         Polynoms polynoms = fillPolynoms();
         Polynoms buf = Polynoms();
         Poly RESULT;
         PackPolynoms groupedPolynoms;
 
-        MPI_Datatype customDT;
+        MPI_Status status;
 
         bool run = true;
         int chunk = 2;
@@ -560,28 +573,33 @@ int main(int argc, char *argv[])
 
             while (j < groupedPolynoms.size) {
                 for (int i = 1; i < processesNum; i++) {
-                    int resultSize;
-                    MPI_Status status;
+                    indata_type data;
+                    indata_type recvData;
+                    Poly bufResult;
                     int sizeOfArr = groupedPolynoms.polynoms.getPolynoms()[j].getSize();
 
-                    MPI_Send(&run, 1, MPI_C_BOOL, 0, 0, MPI_COMM_WORLD);
+                    unsigned int sizesStatic[MAX_CHUNK] = {};
+                    int inputStatic[MAX_POLYNOM] = {};
 
-                    /*MPI_Send(&chunk, 1, MPI_INT, 0, 0, MPI_COMM_WORLD);
-                    MPI_Send(groupedPolynoms.sizes[j], chunk, MPI_INT, 0, 0, MPI_COMM_WORLD);
+                    copyArr((int *) &data.sizes, MAX_CHUNK, (int *)groupedPolynoms.sizes[j], chunk);
+                    copyArr((int*) &data.input, MAX_POLYNOM, groupedPolynoms.polynoms.getPolynoms()[j].getPoly(), sizeOfArr);
 
-                    MPI_Send(&sizeOfArr, 1, MPI_INT, 0, 0, MPI_COMM_WORLD);
-                    MPI_Send(groupedPolynoms.polynoms.getPolynoms()[j].getPoly(), sizeOfArr, MPI_INT, 0, 0, MPI_COMM_WORLD);
+                    data.chunk = chunk;
+                    data.inputSize = sizeOfArr;
+                    data.run = run;
 
-                    MPI_Recv(&resultSize, 1, MPI_INT, i, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
-                    int* result = new int[resultSize] {};
-                    MPI_Recv(result, resultSize, MPI_INT, i, MPI_ANY_TAG, MPI_COMM_WORLD, &status); */
+                    MPI_Send(&data, 1, mpi_custom_dt, i, 0, MPI_COMM_WORLD);
+                    MPI_Recv(&recvData, 1, mpi_custom_dt, i, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
 
-                    buf.addPoly(Poly::copy(Poly()));
-                    //if (resultSize)
-                        //RESULT = Poly::copy(Poly());
+                    int* result = new int[recvData.inputSize] {};
+                    bufResult = Poly::copy(Poly((int*)&recvData.input, recvData.inputSize));
+
+                    buf.addPoly(bufResult);
+                    if (recvData.inputSize)
+                        RESULT = bufResult;
 
                     cout << "recv from " << i << ": ";
-                    Poly().printPoly();
+                    bufResult.printPoly();
                     cout << endl;
 
                     j++;
