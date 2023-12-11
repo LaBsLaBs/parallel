@@ -85,7 +85,7 @@ void thread() {
 
 		MPI_Recv(&msg, 1, MPI_CUSTOM, 0, MPI_ANY_TAG, SortComm, &status);
 		if (!msg.run)
-			return;
+			break;
 
 		int resultSize = msg.resultSize;
 		int partsNum = msg.partsNum;
@@ -101,20 +101,23 @@ void thread() {
 				list[k] = msg.list[j];
 				k++;
 			}
-			cout << "(Sort)<-- ";
-			printArr((int *)msg.list, msg.size);
+			/*cout << "(Sort)<-- ";
+			printArr((int *)msg.list, msg.size);*/
 
 			if (i != partsNum - 1)
 				MPI_Recv(&msg, 1, MPI_CUSTOM, 0, MPI_ANY_TAG, SortComm, &status);
 		}
 
 		list = sortMerge(list, resultSize);
+		cout << "sorted: ";
 		printArr(list, resultSize);
 
 		delete[] list;
 
 		run = msg.run;
 	}
+	
+	cout << "Process " << rank << " has been stopped" << endl;
 }
 
 resultArr mergeParts(int **parts, int partsNum, int *sizes) {
@@ -165,7 +168,7 @@ void merge() {
 
 		MPI_Recv(&msg, 1, MPI_CUSTOM, 0, MPI_ANY_TAG, MergeComm, &status);
 		if (!msg.run)
-			return;
+			break;
 
 		partsNum = msg.partsNum;
 		parts = new int* [partsNum] {};
@@ -175,14 +178,13 @@ void merge() {
 			sizes[i] = msg.size;
 			parts[i] = new int[msg.size] {};
 			copyArr(parts[i], msg.size, (int*) & msg.list, MAX_PART_ARRAY);
-			cout << "(Merge)<-- ";
-			printArr(parts[i], msg.size);
 
 			if (i != partsNum - 1)
 				MPI_Recv(&msg, 1, MPI_CUSTOM, 0, MPI_ANY_TAG, MergeComm, &status);
 		}
 
 		result = mergeParts(parts, partsNum, sizes);
+		cout << "Merged: ";
 		printArr(result.result, result.size);
 
 		delete[] result.result;
@@ -201,8 +203,10 @@ void killChildrens(int processesNum) {
 	Msg msg;
 	msg.run = false;
 	for (int i = 1; i < processesNum - 1; i++) {
+		cout << "stopping Sort" << i << endl;
 		MPI_Send(&msg, 1, MPI_CUSTOM, i, 0, SortComm);
 	}
+	cout << "stopping Merge" << 1 << endl;
 	MPI_Send(&msg, 1, MPI_CUSTOM, 1, 0, MergeComm);
 }
 
@@ -223,8 +227,14 @@ int* generateList(int size, int min, int max) {
 	return list;
 }
 
-vector<vector<vector<int>>> splitList(int* list, int size, int maxChunk, int processesNum) {
-	int chunkNum = size / maxChunk + 1;
+struct Splited {
+	vector<vector<vector<int>>> splited;
+	vector<int> resultSize;
+	int allPartsNum;
+};
+
+Splited splitList(int* list, int size, int maxChunk, int processesNum) {
+	int chunkNum = size / maxChunk + (size % maxChunk != 0);
 
 	vector<vector<int>> parts(chunkNum);
 	vector<int> sizes(chunkNum);
@@ -246,24 +256,43 @@ process:
 	int processChunk = chunkNum / processesNum + 1;
 
 	vector<vector<vector<int>>> processParts(processesNum);
+	vector<int> resultSize(processesNum);
+	int allPartsNum = 0;
 
 	k = 0;
 	for (int i = 0; i < processesNum; i++) {
 		if (chunkNum - k == 0)
 			goto exit;
-		processParts[i] = vector<vector<int>>(processChunk);
+
 		int chunk = min(processChunk, chunkNum - k);
+		processParts[i] = vector<vector<int>>(chunk);
+		resultSize[i] = 0;
+
 		cout << "Process" << i << ": " << endl;
 		for (int j = 0; j < chunk; j++) {
 			cout << "\t" << j << ": ";
 			processParts[i][j] = parts[k];
+			resultSize[i] += parts[k].size();
 			printArr(&parts[k].front(), sizes[k]);
 			k++;
 		}
 	}
 exit:
 
-	return processParts;
+	return Splited{
+		processParts,
+		resultSize,
+		(int)parts.size(),
+	};
+}
+
+void printMsg(Msg msg) {
+	cout << "run: \t\t" << (msg.run ? "true" : "false") << endl;
+	cout << "partsNum: \t" << msg.partsNum << endl;
+	cout << "partSize: \t" << msg.size << endl;
+	cout << "resultSize: \t" << msg.resultSize << endl;
+	cout << "part: ";
+	printArr((int*)&msg.list, msg.size);
 }
 
 
@@ -300,8 +329,10 @@ int main(int argc, char *argv[])
 		printArr(&mergeRanks.front(), 2);
 
 		Msg msg;
-		int* list = generateList(100000, 0, 100);
-		vector<vector<vector<int>>> splited = splitList(list, 100000, MAX_PART_ARRAY, processesNum - 1);
+		int* list = generateList(10000, 0, 1);
+		Splited splited = splitList(list, 10000, MAX_PART_ARRAY, processesNum - 2);
+		vector<vector<vector<int>>> slist = splited.splited;
+		vector<int> resultSize = splited.resultSize;
 
 		delete[] list;
 
@@ -312,36 +343,37 @@ int main(int argc, char *argv[])
 		parts[1] = new int[4] { 9, 10, 82, 105 };
 		
 		cout << "Sorting..." << endl;
-		for (int i = 0; i < numparts; i++) {
-			copyArr((int*)&msg.list, MAX_PART_ARRAY, parts[i], sizes[i]);
-			int to = min(i % (processesNum - 1) + 1, lastProcess - 1);
-			msg.partsNum = spleted[to][i];
-			msg.run = true;
-			msg.size = sizes[i];
-			msg.resultSize = 9;
+		for (int i = 0; i < slist.size(); i++) {
+			int to = min(i % processesNum + 1, lastProcess - 1);
+			cout << "-->Sending to " << to << endl;
+			for (int j = 0; j < slist[i].size(); j++) {
+				cout << j << "/" << slist[i].size() - 1 << ": ";
+				printArr(&slist[i][j].front(), slist[i][j].size());
+				copyArr((int*)&msg.list, MAX_PART_ARRAY, &slist[i][j].front(), slist[i][j].size());
+				msg.partsNum = slist[i].size();
+				msg.run = true;
+				msg.size = slist[i][j].size();
+				msg.resultSize = resultSize[i];
 
-			cout << "(" << to << ")--> ";
-			printArr((int*)msg.list, sizes[i]);
-			MPI_Send(&msg, 1, MPI_CUSTOM, to, 0, SortComm);
+				MPI_Send(&msg, 1, MPI_CUSTOM, to, 0, SortComm);
+			}
 		}
 
 		cout << "Merging..." << endl;
-		for (int i = 0; i < numparts; i++) {
-			copyArr((int*)&msg.list, MAX_PART_ARRAY, parts[i], sizes[i]);
-			msg.partsNum = numparts;
-			msg.run = true;
-			msg.size = sizes[i];
+		for (int i = 0; i < slist.size(); i++) {
+			for (int j = 0; j < slist[i].size(); j++) {
+				copyArr((int*)&msg.list, MAX_PART_ARRAY, &slist[i][j].front(), slist[i][j].size());
+				msg.partsNum = splited.allPartsNum;
+				msg.run = true;
+				msg.size = slist[i][j].size();
 
-			cout << "--> ";
-			printArr((int*)msg.list, 5);
-			MPI_Send(&msg, 1, MPI_CUSTOM, 1, 0, MergeComm);
+				MPI_Send(&msg, 1, MPI_CUSTOM, 1, 0, MergeComm);
+			}
 		}
 
 		delete[] parts[0];
 		delete[] parts[1];
 		delete[] parts;
-
-		Sleep(10000);
 
 		killChildrens(processesNum);
 	}
