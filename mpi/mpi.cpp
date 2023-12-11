@@ -6,6 +6,7 @@
 #include <numeric>
 #include <limits.h>
 #include <windows.h>
+#include <algorithm>
 
 
 using namespace std;
@@ -68,6 +69,34 @@ struct resultArr {
 };
 
 int* sortMerge(int* list, int size) {
+	sort(list, (int *)(list + size));
+	return list;
+}
+
+int *MPI_Recv_Concat_Parts(Msg msg) {
+	MPI_Status status;
+	int resultSize = msg.resultSize;
+	int partsNum = msg.partsNum;
+	int *list = new int[resultSize] {};
+
+	int k = 0;
+	for (int i = 0; i < partsNum; i++) {
+		for (int j = 0; j < msg.size; j++) {
+			if (k == resultSize) {
+				cout << "[ERROR]" << endl;
+				delete[] list;
+				return NULL;
+			}
+			list[k] = msg.list[j];
+			k++;
+		}
+		/*cout << "(Sort)<-- ";
+		printArr((int *)msg.list, msg.size);*/
+
+		if (i != partsNum - 1)
+			MPI_Recv(&msg, 1, MPI_CUSTOM, 0, MPI_ANY_TAG, SortComm, &status);
+	}
+
 	return list;
 }
 
@@ -88,25 +117,7 @@ void thread() {
 			break;
 
 		int resultSize = msg.resultSize;
-		int partsNum = msg.partsNum;
-		list = new int[resultSize] {};
-
-		int k = 0;
-		for (int i = 0; i < partsNum; i++) {
-			for (int j = 0; j < msg.size; j++) {
-				if (k == resultSize) {
-					cout << "[ERROR]" << endl;
-					return;
-				}
-				list[k] = msg.list[j];
-				k++;
-			}
-			/*cout << "(Sort)<-- ";
-			printArr((int *)msg.list, msg.size);*/
-
-			if (i != partsNum - 1)
-				MPI_Recv(&msg, 1, MPI_CUSTOM, 0, MPI_ANY_TAG, SortComm, &status);
-		}
+		list = MPI_Recv_Concat_Parts(msg);
 
 		list = sortMerge(list, resultSize);
 		cout << "sorted: ";
@@ -295,6 +306,22 @@ void printMsg(Msg msg) {
 	printArr((int*)&msg.list, msg.size);
 }
 
+void sendParts(vector<vector<int>> parts, int resultSize, int to, MPI_Comm comm) {
+	Msg msg;
+
+	for (int j = 0; j < parts.size(); j++) {
+		cout << j << "/" << parts.size() - 1 << ": ";
+		printArr(&parts[j].front(), parts[j].size());
+		copyArr((int*)&msg.list, MAX_PART_ARRAY, &parts[j].front(), parts[j].size());
+		msg.partsNum = parts.size();
+		msg.run = true;
+		msg.size = parts[j].size();
+		msg.resultSize = resultSize;
+
+		MPI_Send(&msg, 1, MPI_CUSTOM, to, 0, comm);
+	}
+}
+
 
 int main(int argc, char *argv[])
 {
@@ -321,7 +348,6 @@ int main(int argc, char *argv[])
 
 	registerStruct(&msgType, &MPI_CUSTOM);
 
-#define numparts 2
 	if (!rank) {
 		cout << "sort group: ";
 		printArr(&ranks.front(), processesNum - 1);
@@ -329,51 +355,24 @@ int main(int argc, char *argv[])
 		printArr(&mergeRanks.front(), 2);
 
 		Msg msg;
-		int* list = generateList(10000, 0, 1);
-		Splited splited = splitList(list, 10000, MAX_PART_ARRAY, processesNum - 2);
+		int* list = generateList(10001, 0, 4);
+		Splited splited = splitList(list, 10001, MAX_PART_ARRAY, processesNum - 2);
 		vector<vector<vector<int>>> slist = splited.splited;
 		vector<int> resultSize = splited.resultSize;
 
-		delete[] list;
-
-		int** parts = new int*[numparts] {};
-		int sizes[numparts] = { 5, 4 };
-		int partsNums[numparts] = { 1, 1 };
-		parts[0] = new int[5]{ 3, 27, 38, 43, 55 };
-		parts[1] = new int[4] { 9, 10, 82, 105 };
-		
 		cout << "Sorting..." << endl;
 		for (int i = 0; i < slist.size(); i++) {
 			int to = min(i % processesNum + 1, lastProcess - 1);
 			cout << "-->Sending to " << to << endl;
-			for (int j = 0; j < slist[i].size(); j++) {
-				cout << j << "/" << slist[i].size() - 1 << ": ";
-				printArr(&slist[i][j].front(), slist[i][j].size());
-				copyArr((int*)&msg.list, MAX_PART_ARRAY, &slist[i][j].front(), slist[i][j].size());
-				msg.partsNum = slist[i].size();
-				msg.run = true;
-				msg.size = slist[i][j].size();
-				msg.resultSize = resultSize[i];
-
-				MPI_Send(&msg, 1, MPI_CUSTOM, to, 0, SortComm);
-			}
+			sendParts(slist[i], resultSize[i], to, SortComm);
 		}
 
 		cout << "Merging..." << endl;
 		for (int i = 0; i < slist.size(); i++) {
-			for (int j = 0; j < slist[i].size(); j++) {
-				copyArr((int*)&msg.list, MAX_PART_ARRAY, &slist[i][j].front(), slist[i][j].size());
-				msg.partsNum = splited.allPartsNum;
-				msg.run = true;
-				msg.size = slist[i][j].size();
-
-				MPI_Send(&msg, 1, MPI_CUSTOM, 1, 0, MergeComm);
-			}
+			sendParts(slist[i], splited.allPartsNum, 1, MergeComm);
 		}
 
-		delete[] parts[0];
-		delete[] parts[1];
-		delete[] parts;
+		delete[] list;
 
 		killChildrens(processesNum);
 	}
