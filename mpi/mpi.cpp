@@ -524,12 +524,17 @@ Polynoms fillPolynoms()
         poly.fillRandom(1, 2);
         polynoms.addPoly(Poly::copy(poly));
     }
-    Poly poly = Poly(1);
+
+    /* Poly poly = Poly(1);
     poly.fillRandom(2, 5);
     polynoms.addPoly(Poly::copy(poly));
     Poly poly1 = Poly(4);
     poly1.fillRandom(2, 5);
+    polynoms.addPoly(Poly::copy(poly1)); */
+    
+    /* polynoms.addPoly(Poly::copy(poly1));
     polynoms.addPoly(Poly::copy(poly1));
+    polynoms.addPoly(Poly::copy(poly1)); */
 
 
     return polynoms;
