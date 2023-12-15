@@ -109,6 +109,11 @@ int main(int argc, char *argv[])
     vector<int> test = exludeVector(dec, processesNum);
 
     if (!checkIn((int *)&dec.front(), dec.size(), rank)){
+<<<<<<< HEAD
+=======
+        // cout << "thread" << rank << " in dec" << endl;
+
+>>>>>>> 319c7c96fcc2dd4ce2975948abf6c4a066a324a1
         MPI_Comm_group(MPI_COMM_WORLD, &GroupComm);
         MPI_Group_incl(GroupComm, test.size(), test.data(), &GraphGroup);
         MPI_Comm_create(MPI_COMM_WORLD, GraphGroup, &buf);
@@ -127,13 +132,21 @@ int main(int argc, char *argv[])
         int processesStarNum = processesNum - processesDecNum + 1;
 
         if (rank == 0) {
+<<<<<<< HEAD
             cout << "graph processes: ";
             printArr((int*)&test.front(), test.size());
+=======
+            /* printArr((int*)&test.front(), test.size());
+>>>>>>> 319c7c96fcc2dd4ce2975948abf6c4a066a324a1
 
             cout << "edges: ";
             printArr((int*)&edges.front(), edges.size());
+<<<<<<< HEAD
             cout << "indexes: ";
             printArr((int*)&indexes.front(), indexes.size());
+=======
+            printArr((int*)&indexes.front(), indexes.size()); */
+>>>>>>> 319c7c96fcc2dd4ce2975948abf6c4a066a324a1
         }
 
         MPI_Graph_create(buf, processesDecNum, indexes.data(), edges.data(), 1, &MPI_Comm_star);
@@ -152,7 +165,7 @@ int main(int argc, char *argv[])
 
         MPI_Cart_create(buf, ndims, dec.data(), periods, 1, &MPI_Comm_dec);
 
-        starG();
+        // starG();
     }
 
 
