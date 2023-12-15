@@ -14,6 +14,7 @@ using namespace std;
 
 
 MPI_Comm MPI_Comm_dec, MPI_Comm_star;
+MPI_Comm buf;
 
 
 void thread()
@@ -36,39 +37,32 @@ void thread()
     bool isMain = nneighbors != 1;
 
     while (true) {
-        if (isMain) {
-            bool run = true;
-            for (int i = 0; i < nneighbors; i++)
-                MPI_Send(&run, 1, MPI_C_BOOL, neighbors[i], 0, MPI_Comm_star);
 
-            for (int i = 0; i < nneighbors; i++) {
-                MPI_Recv(&run, 1, MPI_C_BOOL, neighbors[i], 0, MPI_Comm_star, &status);
-                cout << "recv form " << neighbors[i] << ": " << (run ? "run" : "stop") << endl;
-                if (!run)
-                    goto end;
-            }
-        }
-        else {
-            bool run = false;
-            MPI_Recv(&run, 1, MPI_C_BOOL, neighbors[0], 0, MPI_Comm_star, &status);
+        bool run = isMain, recvRun;
 
-            cout << "recv from main: " << run << endl;
-            cout << "sleeping " << rank << " ..." << endl;
-            Sleep(rank);
-            cout << "sending stop to main..." << endl;
-            run = false;
-            MPI_Send(&run, 1, MPI_C_BOOL, neighbors[0], 0, MPI_Comm_star);
-            goto end;
+        for (int i = 0; i < nneighbors; i++) {
+            MPI_Sendrecv(&run, 1, MPI_C_BOOL, neighbors[i], 1, &recvRun, 1, MPI_C_BOOL, neighbors[i],
+            1, MPI_Comm_star, &status);
+            cout << "(" << rank << ")" << " <- " << (recvRun ? "run" : "stop") << endl;
         }
+        break;
     }
 
 end:
-    cout << "stopping" << endl;
+    // cout << "stopping" << endl;
     delete[] neighbors;
 }
 
 void starG() {
+    int src, dst, rank, data;
+    MPI_Status status;
+    MPI_Comm_rank(buf, &rank);
 
+    data = rank;
+    cout << "(" << rank << ")current data: " << data << endl;
+    MPI_Cart_shift(MPI_Comm_dec, 0, 1, &src, &dst);
+    MPI_Sendrecv_replace(&data, 1, MPI_INT, dst, 0, src, 0, MPI_Comm_dec, &status);
+    cout << "(" << rank << ")recv data: " << data << endl;
 }
 
 void printArr(int* arr, int size) {
@@ -111,7 +105,6 @@ int main(int argc, char *argv[])
 
     /* build graph */
     MPI_Group GroupComm, GraphGroup, DecGroup;
-    MPI_Comm buf;
     vector<int> dec(processesNum / 2);
     iota(dec.begin(), dec.end(), dec.size());
     vector<int> test = exludeVector(dec, processesNum);
@@ -121,7 +114,7 @@ int main(int argc, char *argv[])
     //buildDerivedType(&type, &mpi_custom_dt);
 
     if (!checkIn((int *)&dec.front(), dec.size(), rank)){
-        cout << "thread" << rank << " in dec" << endl;
+        // cout << "thread" << rank << " in dec" << endl;
 
         MPI_Comm_group(MPI_COMM_WORLD, &GroupComm);
         MPI_Group_incl(GroupComm, test.size(), test.data(), &GraphGroup);
@@ -141,10 +134,10 @@ int main(int argc, char *argv[])
         int processesStarNum = processesNum - processesDecNum + 1;
 
         if (rank == 0) {
-            printArr((int*)&test.front(), test.size());
+            /* printArr((int*)&test.front(), test.size());
 
             printArr((int*)&edges.front(), edges.size());
-            printArr((int*)&indexes.front(), indexes.size());
+            printArr((int*)&indexes.front(), indexes.size()); */
         }
 
         MPI_Graph_create(buf, processesDecNum, indexes.data(), edges.data(), 1, &MPI_Comm_star);
@@ -152,27 +145,18 @@ int main(int argc, char *argv[])
 		thread();
     }
     else {
-        cout << "thread" << rank << " in star" << endl;
+        // cout << "thread" << rank << " in star" << endl;
 
         MPI_Comm_group(MPI_COMM_WORLD, &GroupComm);
         MPI_Group_incl(GroupComm, dec.size(), dec.data(), &DecGroup);
         MPI_Comm_create(MPI_COMM_WORLD, DecGroup, &buf);
-        MPI_Comm_rank(buf, &rank);
 
-        int ndims = dec.size() / dec_chunk + (dec.size() < dec_chunk);
-        cout << "ndims: " << ndims << endl;
-        vector<int> priods(ndims, 1);
-        vector<int> dims(ndims);
-        for (int i = 0; i < ndims - 1; i++)
-            dims[i] = dec_chunk;
-        dims[ndims - 1] = dec.size() - (ndims - 1) * dec_chunk;
-        cout << "dec size: " << dims[ndims - 1] << endl;
-        cout << "dims: ";
-        printArr((int*)&dims.front(), dims.size());
+        int ndims = 1;
+        int periods[] = { 1 };
 
-        MPI_Cart_create(buf, ndims, dims.data(), priods.data(), 1, &MPI_Comm_dec);
+        MPI_Cart_create(buf, ndims, dec.data(), periods, 1, &MPI_Comm_dec);
 
-        starG();
+        // starG();
     }
 
 
