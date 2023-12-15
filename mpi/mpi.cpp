@@ -9,6 +9,10 @@
 
 using namespace std;
 
+
+#define dec_chunk 4
+
+
 MPI_Comm MPI_Comm_dec, MPI_Comm_star;
 
 
@@ -102,19 +106,15 @@ int main(int argc, char *argv[])
 	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 	MPI_Comm_size(MPI_COMM_WORLD, &processesNum);
 
-    if (processesNum < 3)
+    if (processesNum < 4)
         return 0;
 
     /* build graph */
-    MPI_Group GroupComm, GraphGroup;
+    MPI_Group GroupComm, GraphGroup, DecGroup;
     MPI_Comm buf;
     vector<int> dec(processesNum / 2);
     iota(dec.begin(), dec.end(), dec.size());
     vector<int> test = exludeVector(dec, processesNum);
-
-    MPI_Comm_group(MPI_COMM_WORLD, &GroupComm);
-    MPI_Group_incl(GroupComm, test.size(), test.data(), &GraphGroup);
-    MPI_Comm_create(MPI_COMM_WORLD, GraphGroup, &buf);
 
     /*build dec*/
 
@@ -123,6 +123,9 @@ int main(int argc, char *argv[])
     if (!checkIn((int *)&dec.front(), dec.size(), rank)){
         cout << "thread" << rank << " in dec" << endl;
 
+        MPI_Comm_group(MPI_COMM_WORLD, &GroupComm);
+        MPI_Group_incl(GroupComm, test.size(), test.data(), &GraphGroup);
+        MPI_Comm_create(MPI_COMM_WORLD, GraphGroup, &buf);
         MPI_Comm_rank(buf, &rank);
 
         vector<int> edges((test.size() - 1) * 2);
@@ -150,6 +153,25 @@ int main(int argc, char *argv[])
     }
     else {
         cout << "thread" << rank << " in star" << endl;
+
+        MPI_Comm_group(MPI_COMM_WORLD, &GroupComm);
+        MPI_Group_incl(GroupComm, dec.size(), dec.data(), &DecGroup);
+        MPI_Comm_create(MPI_COMM_WORLD, DecGroup, &buf);
+        MPI_Comm_rank(buf, &rank);
+
+        int ndims = dec.size() / dec_chunk + (dec.size() < dec_chunk);
+        cout << "ndims: " << ndims << endl;
+        vector<int> priods(ndims, 1);
+        vector<int> dims(ndims);
+        for (int i = 0; i < ndims - 1; i++)
+            dims[i] = dec_chunk;
+        dims[ndims - 1] = dec.size() - (ndims - 1) * dec_chunk;
+        cout << "dec size: " << dims[ndims - 1] << endl;
+        cout << "dims: ";
+        printArr((int*)&dims.front(), dims.size());
+
+        MPI_Cart_create(buf, ndims, dims.data(), priods.data(), 1, &MPI_Comm_dec);
+
         starG();
     }
 
