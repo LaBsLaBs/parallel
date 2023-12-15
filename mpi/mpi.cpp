@@ -109,7 +109,6 @@ int main(int argc, char *argv[])
     vector<int> test = exludeVector(dec, processesNum);
 
     if (!checkIn((int *)&dec.front(), dec.size(), rank)){
-
         MPI_Comm_group(MPI_COMM_WORLD, &GroupComm);
         MPI_Group_incl(GroupComm, test.size(), test.data(), &GraphGroup);
         MPI_Comm_create(MPI_COMM_WORLD, GraphGroup, &buf);
